@@ -2,7 +2,7 @@
 
 `pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming H.265 decoder for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each frame it delivers the decoded picture, motion vectors and prediction residual together. The decoder accepts complete Annex B access units, independently of the protocol or file format carrying the stream.
 
-One wheel includes the Python binding, C++ shared library, public C++ headers and CMake package configuration. Python callers receive owned CuPy arrays; C++ callers can borrow the decoded GPU surfaces.
+One wheel includes the Python binding, `libpixtreme_nvdec.so`, public C headers, a header-only C++ wrapper and CMake package configuration. Python callers receive owned CuPy arrays; C and C++ callers can borrow decoded GPU surfaces.
 
 ## Install
 
@@ -18,9 +18,12 @@ For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves 
 
 The wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`) and CPython 3.12 or later through the stable Python ABI. Runtime decoding requires an NVIDIA GPU and a driver supporting the CUDA 13 runtime, including in WSL2 and containers. Native GPU code targets sm 86, sm 89 and sm 120. The NVIDIA driver is supplied by the runtime environment.
 
-## C++ API
+## C and C++ APIs
 
-The installed C++ contract is `pixtreme/nvdec/decoder.hpp`. Add the installed
+The shared library exposes C ABI version 6 through
+`pixtreme/nvdec/c/decoder.h`. The header-only C++17 wrapper is
+`pixtreme/nvdec/decoder.hpp`. Both interfaces are independent of the transport
+core and require no CUDA SDK headers. Add the installed
 `pixtreme/transport/nvdec` directory to `CMAKE_PREFIX_PATH`, then use:
 
 ```cmake
@@ -28,9 +31,23 @@ find_package(pixtreme_transport_nvdec CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE pixtreme::transport_nvdec)
 ```
 
-The target requires C++17 and does not expose implementation or CUDA SDK
-headers. Check `abi_version() == ABI_VERSION` before other library calls.
-The current ABI version is 5.
+C callers check `pixtreme_transport_nvdec_abi_version()` against
+`PIXTREME_TRANSPORT_NVDEC_ABI_VERSION` before other library calls. C++ callers
+can use `require_compatible_abi()`; `Decoder` also checks during construction.
+C functions use opaque handles, records beginning with `struct_size`, and
+status/error outputs. Initialize `struct_size` to `sizeof(record)`. An error
+handle describes the reason, whether it is fatal, and its message. Release
+owned handles with `pixtreme_transport_nvdec_handle_release()`; the public C
+headers document borrowed views and the required prefixes of sized records.
+The C++ wrapper translates errors into `DecoderError` and manages references.
+
+To move from ABI 5, rebuild native consumers against the ABI 6 headers and
+library together. Existing C++ callers keep the namespace and type names;
+they now compile the wrapper into their own binary. C callers use the
+`pixtreme_transport_nvdec_` functions directly. Consumers may use their own
+C++ compiler and standard library. Python names and behavior are unchanged.
+
+In the C++ wrapper,
 `Decoder(device, output_surfaces, threads=0)` requires an explicit positive
 surface capacity. Hardware decoder creation occurs on the first sequence; an
 unsupported capacity fails that `decode` with a fatal `DecoderError`.
@@ -73,7 +90,7 @@ pending queries, including picture returns and resource cleanup.
 
 ## Python API
 
-The Python boundary uses this C++ contract, copies each borrowed surface into
+The Python boundary calls the C ABI through the C++ wrapper, copies each borrowed surface into
 owned CuPy Y/Cb/Cr planes, returns the surface after the copy, and waits for
 completion before returning a tuple of pictures:
 
@@ -98,7 +115,7 @@ values, read-only integer `nal_unit_type`, and read-only `vui_timing` as an
 integer `(num_units_in_tick, time_scale)` tuple or `None` when not signalled,
 plus `pictures` and the functions
 `raw_mv()`, `raw_residual()`, `mv()`, and `residual()`. The raw functions expose
-HEVC values for research; the processed functions provide the primary output.
+HEVC values; the processed functions provide the primary output.
 The Python API has no surface loan or return operation and does not import the
 transport core. `DecoderError` has `reason` and `fatal` attributes.
 
