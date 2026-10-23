@@ -6,17 +6,17 @@ One wheel includes the Python binding, C++ shared library, public C++ headers an
 
 ## Install
 
-Download the wheel for your environment from [Releases](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases), then install it from the download directory:
+Install from PyPI:
 
 ```bash
-pip install ./pixtreme_transport_nvdec-*-cp312-abi3-manylinux_2_28_x86_64.whl
+pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add` with the path to the downloaded wheel. The installer resolves the `cupy-cuda13x[ctk]==14.2.0` dependency. The transport core is not required for the decoder's Python API.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `cupy-cuda13x[ctk]==14.2.0` dependency from PyPI. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
-Release wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`) and CPython 3.12 or later through the stable Python ABI. Runtime decoding requires an NVIDIA GPU and a driver supporting the CUDA 13 runtime, including in WSL2 and containers. Native GPU code targets sm 86, sm 89 and sm 120. The NVIDIA driver is supplied by the runtime environment.
+The wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64`) and CPython 3.12 or later through the stable Python ABI. Runtime decoding requires an NVIDIA GPU and a driver supporting the CUDA 13 runtime, including in WSL2 and containers. Native GPU code targets sm 86, sm 89 and sm 120. The NVIDIA driver is supplied by the runtime environment.
 
 ## C++ API
 
