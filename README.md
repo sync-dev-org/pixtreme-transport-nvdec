@@ -65,7 +65,13 @@ optional `VuiTiming` with the picture's SPS `num_units_in_tick` and `time_scale`
 as unsigned 32-bit integers. It returns `std::nullopt` when VUI is absent or
 does not signal timing; no default or frame-period conversion is applied.
 `picture` borrows an NVDEC surface with plane layout and
-optional VUI colour values; P016 samples contain ten bits starting at bit 6. Return the loan
+optional VUI colour values; P016 samples contain ten bits starting at bit 6.
+Its pointer and byte count span the coded surface. Its width, height, and
+plane dimensions describe the SPS conformance window. Read each plane from
+`pointer + plane.offset`, using its row and pixel strides; the Y offset can
+be nonzero, and chroma starts after the coded luma height. The Python boundary
+copies this display region into its owned pictures.
+Return the loan
 exactly once using `return_picture(lease, read_done_event)` after all GPU reads.
 The return operation waits for that event before unmap and remains available
 after the `Decoder` object is destroyed. `close()` stops new work immediately;
