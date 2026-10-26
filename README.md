@@ -56,7 +56,7 @@ unsupported capacity fails that `decode` with a fatal `DecoderError`.
 optional timing. Decimal strings preserve timestamp precision. No packet
 type, random-access flag, or discontinuity flag is required.
 
-For same-size two-layer Scalable Main SHVC and two-view Multiview Main
+For same-size two-layer Scalable Main or Scalable Main 4:4:4 SHVC and two-view Multiview Main
 MV-HEVC, submit each complete AU with all its layers. The fixed
 `output_layer_set_index` selects the VPS output layer set. Its default, zero,
 returns base-layer pictures through the single-layer decode path, including
@@ -74,8 +74,11 @@ pictures are decoded without consuming output loans; the caller's surface
 capacity applies to the entire decoder. An index absent from a newly active
 VPS reports its exact value and absence as a recoverable error. Later AUs
 using a VPS that contains the index can still be decoded.
-Spatially different SHVC layers, Scalable Main 10, ten-bit
-MV-HEVC, and more than two layers are rejected at parameter sets.
+Scalable Main 4:4:4 accepts matching 8-bit 4:2:0, 4:2:2 or 4:4:4 layers,
+subject to the active GPU's NVDEC capability query. Its 4:4:4 pictures use
+YUV444 surfaces. Spatially different SHVC layers, unequal layer chroma
+formats, non-eight-bit Scalable Main 4:4:4, Scalable Main 10, ten-bit
+MV-HEVC, monochrome and more than two layers are rejected at parameter sets.
 
 `decode`, `discontinuity`, and `flush` return `DecodedFrame` values in display
 order with CUDA completion events. Wait on each event before reading its GPU
