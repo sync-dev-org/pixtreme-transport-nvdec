@@ -1,6 +1,6 @@
 # pixtreme-transport-nvdec
 
-`pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming H.265 and H.264 decoder for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each H.265 picture (a frame or a field) it delivers the decoded pixels, motion vectors and prediction residual together; for each H.264 frame it delivers the decoded pixels. The decoder accepts complete Annex B access units, independently of the protocol or file format carrying the stream.
+`pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming decoder of H.265, H.264, VP8, VP9, AV1, MPEG-1, MPEG-2, MPEG-4 Part 2, VC-1 and JPEG for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each H.265 picture (a frame or a field) it delivers the decoded pixels, motion vectors and prediction residual together; for each picture of the other codecs it delivers the decoded pixels. The decoder accepts each codec's unit of one picture (a complete Annex B access unit for H.265 and H.264, a frame for VP8 and VP9, a temporal unit for AV1), independently of the protocol or file format carrying the stream.
 
 One wheel includes the Python binding, `libpixtreme_nvdec.so`, public C headers, a header-only C++ wrapper and CMake package configuration. Python, C and C++ callers borrow each decoded picture as a pixtreme `PixelBuffer` without a copy.
 
@@ -65,12 +65,23 @@ In the C++ wrapper,
 `Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc)`
 requires an explicit positive number of pictures lent at once. A decoder
 decodes the one codec chosen at creation; this version decodes H.265
-(`Codec::Hevc`) and H.264 (`Codec::H264`), and an unknown codec value is invalid
-input. `output_layer_set_index` applies to H.265 and must be zero for H.264. Hardware decoder creation occurs on
+(`Codec::Hevc`), H.264 (`Codec::H264`), VP8 (`Codec::Vp8`), VP9 (`Codec::Vp9`),
+AV1 (`Codec::Av1`), MPEG-1 (`Codec::Mpeg1`), MPEG-2
+(`Codec::Mpeg2`), MPEG-4 Part 2 (`Codec::Mpeg4`), VC-1 of the Simple, Main and
+Advanced profiles (`Codec::Vc1`) and JPEG (`Codec::Jpeg`), and an unknown codec
+value is invalid input. `output_layer_set_index` applies to H.265 and must be zero
+for the other codecs. Hardware decoder creation occurs on
 the first sequence; an unsupported number of surfaces fails that `decode` with
-a fatal `DecoderError`. `AccessUnit` owns Annex B bytes, optional Annex B,
-hvcC (H.265) or avcC (H.264) configuration, optional timing and an optional `pixtreme_owner_t` record
-of the caller. Decimal strings preserve timestamp precision. No packet type,
+a fatal `DecoderError`. `AccessUnit` owns the bytes of one unit (an Annex B
+access unit for H.265 and H.264; one frame for VP8 and VP9, a VP9 superframe
+included; one temporal unit for AV1, with or without its temporal delimiter;
+one picture for MPEG-1 and MPEG-2, one field
+picture of a field pair; one VOP for MPEG-4 Part 2; one frame for VC-1, with or
+without its frame start code; one image for JPEG), optional configuration
+(Annex B start code headers, hvcC for H.265, avcC for H.264, av1C for AV1, or
+STRUCT_C and STRUCT_A as `CodecConfigurationFormat::Rcv` for VC-1 Simple and
+Main), optional timing and an optional `pixtreme_owner_t` record of the caller.
+Bytes that hold more than one unit are invalid input. Decimal strings preserve timestamp precision. No packet type,
 random-access flag, or discontinuity flag is required.
 
 The decoder retains an access unit's owner record once when it queues the
@@ -113,10 +124,14 @@ decoder records its writes on its streams as pixtreme use records of the
 picture's `PixelBuffer` and of each NDArray that `mv()` and `residual()`
 return, and a reader orders its stream after them. Metadata defined by H.265 syntax is
 optional: on H.265 frames only `vui_timing()` and `pic_struct()` can be empty,
-and every other field holds a value; H.264 frames hold none of them, and their
-`mv()` and `residual()` throw a recoverable `InvalidState` error. An H.264
-stream whose fields are separate pictures passes one field's access unit per
-call; the frame of two fields carries its first field's input values. Each frame's read-only `slice_type()`
+and every other field holds a value; frames of the other codecs hold none of
+them, and their `mv()` and `residual()` throw a recoverable `InvalidState`
+error. An H.264 or MPEG-2 stream whose fields are separate pictures passes one
+field's unit per call; the frame of two fields carries its first field's input
+values. As libvpx and libaom output, a VP9 input returns its last frame when
+that frame is shown, and an AV1 temporal unit the last frame it shows; a hidden
+frame returns none, and a frame shown again with `show_existing_frame` carries
+the input values of the call that shows it. Each frame's read-only `slice_type()`
 returns its first slice segment's HEVC value (0 = B, 1 = P, 2 = I). Read-only
 `nal_unit_type()` returns the picture's slice-segment NAL unit type as an
 integer, including IDR (19, 20), CRA (21), BLA (16–18), and non-IRAP types.
@@ -147,6 +162,21 @@ or from `chroma_sample_loc_type_bottom_field` for a field picture whose
 signals no chroma location, and for 4:2:2 and 4:4:4 pictures.
 Streams whose luma and chroma bit depths differ are refused as a
 capability shortfall, because a `PixelBuffer` has one bit depth.
+Pictures of the other codecs declare the colour values their syntax signals,
+or those their standard specifies when it signals none (the C header lists
+them per codec); gray JPEG images are lent as `gray8`. JPEG 4:2:2 and 4:4:4
+images, which NVDEC outputs only subsampled to 4:2:0, and JPEG images other
+than sequential Huffman (baseline and extended) ones, such as progressive images,
+which NVDEC does not decode, are refused as a capability shortfall.
+After a VP8, VP9 or AV1 frame is refused as a capability shortfall, subsequent inputs are
+refused as `unsupported` until a key frame initializes all saved decoding
+state. A VP9 non-key frame whose width or height exceeds the last accepted key
+frame's width or height is refused this way, even if the decoder reserved more
+space. Intra-only frames do not resume decoding after this refusal. A frame
+that shows again a picture of another size than its owning decoder's current
+output is refused for that input alone; this does not start a wait for a key
+frame. Discontinuities retain their existing invalid-input classification for
+frames that refer to discarded references.
 
 There is no return operation. Release the `PixelBuffer`'s last reference on
 the stream of its last read (`pixel_buffer::release(stream)` or
@@ -158,7 +188,9 @@ first. Releasing every reference to a frame whose picture was not taken returns
 its surface as well. A taken `PixelBuffer` stays valid after its frame and the
 decoder are released or closed. When every surface is lent, `decode` succeeds
 and defers output without waiting for a return; after releasing a picture, call
-`decode` or `flush` to collect deferred pictures. Repeat `flush` until it
+`decode` or `flush` to collect deferred pictures. A VP9 or AV1 frame that shows
+again a picture whose earlier `PixelBuffer` is still held is deferred the same
+way, since NVDEC maps a decoded picture once at a time. Repeat `flush` until it
 returns an empty vector.
 
 `is_supported(device, codec, chroma_format, bit_depth, width, height)` (C:
@@ -221,15 +253,17 @@ with DecoderSession(threads=0, device=0, output_layer_set_index=0,
     for record in decoder.decode(
         access_unit_bytes,
         configuration=configuration_bytes,  # optional
-        configuration_format="annexb",       # or "hvcc"
+        configuration_format="annexb",       # "hvcc", "avcc", "av1c" or "rcv"
         pts=None, dts=None, duration=None, time_base=(1, 90000),
     ):
         picture = record.take_picture()  # a pixtreme.PixelBuffer
 ```
 
 `output_surfaces` is required and names the number of pictures the decoder can
-lend at once. `codec` defaults to `"hevc"`, the only codec name of this
-version; another name raises `DecoderError` with reason `"invalid_input"`.
+lend at once. `codec` defaults to `"hevc"`; the other names are `"h264"`,
+`"vp8"`, `"vp9"`, `"av1"`, `"mpeg1"`, `"mpeg2"`, `"mpeg4"` (MPEG-4 Part 2),
+`"vc1"` and `"jpeg"`, and another
+name raises `DecoderError` with reason `"invalid_input"`.
 `decode` accepts CPU bytes, bytearray, or memoryview. Missing timing stays
 missing; `time_base` is an optional integer `(numerator, denominator)` tuple.
 Call `discontinuity()` before the first AU after a transport interruption.
