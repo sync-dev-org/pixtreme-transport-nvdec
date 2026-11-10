@@ -2,7 +2,7 @@
 
 `pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming H.265 decoder for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each picture (a frame or a field) it delivers the decoded pixels, motion vectors and prediction residual together. The decoder accepts complete Annex B access units, independently of the protocol or file format carrying the stream.
 
-One wheel includes the Python binding, `libpixtreme_nvdec.so`, public C headers, a header-only C++ wrapper and CMake package configuration. Python callers receive owned CuPy arrays; C and C++ callers can borrow decoded GPU surfaces.
+One wheel includes the Python binding, `libpixtreme_nvdec.so`, public C headers, a header-only C++ wrapper and CMake package configuration. Python, C and C++ callers borrow each decoded picture as a pixtreme `PixelBuffer` without a copy.
 
 ## Install
 
@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `cupy-cuda13x[ctk]==14.2.0` dependency from PyPI. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.12.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
@@ -20,11 +20,14 @@ The wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64
 
 ## C and C++ APIs
 
-The shared library exposes C ABI version 7 through
+The shared library exposes C ABI version 8 through
 `pixtreme/nvdec/c/decoder.h`. The header-only C++17 wrapper is
 `pixtreme/nvdec/decoder.hpp`. Both interfaces are independent of the transport
-core and require no CUDA SDK headers. Add the installed
-`pixtreme/transport/nvdec` directory to `CMAKE_PREFIX_PATH`, then use:
+core and require no CUDA SDK headers. They lend each picture as a
+[pixtreme](https://github.com/sync-dev-org/pixtreme) `PixelBuffer`, so they
+include pixtreme's public headers and link its shared library. Add the
+installed `pixtreme/transport/nvdec` directory and pixtreme's `pixtreme/core`
+directory to `CMAKE_PREFIX_PATH`, then use:
 
 ```cmake
 find_package(pixtreme_transport_nvdec CONFIG REQUIRED)
@@ -36,25 +39,48 @@ C callers check `pixtreme_transport_nvdec_abi_version()` against
 can use `require_compatible_abi()`; `Decoder` also checks during construction.
 C functions use opaque handles, records beginning with `struct_size`, and
 status/error outputs. Initialize `struct_size` to `sizeof(record)`. An error
-handle describes the reason, whether it is fatal, and its message. Release
-owned handles with `pixtreme_transport_nvdec_handle_release()`; the public C
-headers document borrowed views and the required prefixes of sized records.
-The C++ wrapper translates errors into `DecoderError` and manages references.
+handle describes the reason, whether it is fatal, and its message. The reason
+`UNSUPPORTED` (C++ `ErrorReason::Unsupported`) reports a capability shortfall:
+the GPU's NVDEC cannot decode the stream, or no `PixelBuffer` format represents
+its pictures. Malformed input, rejected arguments and stream forms the decoder
+excludes by design use `INVALID_INPUT`. Release owned handles with
+`pixtreme_transport_nvdec_handle_release()`; the public C headers document
+borrowed views and the required prefixes of sized records. The C++ wrapper
+translates errors into `DecoderError` and manages references.
 
-Rebuild native consumers against the ABI 7 headers and library together.
-ABI 7 adds field/layer metadata, output-layer-set selection, surface formats and a mandatory `chroma_bit_depth` field to the
-picture descriptor; `bit_depth` describes luma. C++ callers compile the
-wrapper into their own binary. C callers use the
+Rebuild native consumers against the ABI 8 headers and library together.
+ABI 8 replaces the decoder's own picture description, loan identifiers and
+return operations with pixtreme's `PixelBuffer`, returns `mv()` and
+`residual()` as pixtreme NDArrays, removes the H.265 motion and residual
+operations (`raw_mv()`, `raw_residual()`) together with the decoder's own
+array type, replaces the frame's CUDA completion event
+with pixtreme use records, and adds the codec chosen at creation, an optional
+owner record per access unit, the capability-shortfall reason, a support
+query, and a presence flag for each H.265 metadata field.
+C++ callers compile the wrapper into their own binary. C callers use the
 `pixtreme_transport_nvdec_` functions directly. Consumers may use their own
-C++ compiler and standard library. Existing Python names retain their meanings.
+C++ compiler and standard library.
 
 In the C++ wrapper,
-`Decoder(device, output_surfaces, threads=0, output_layer_set_index=0)` requires an explicit positive
-surface capacity. Hardware decoder creation occurs on the first sequence; an
-unsupported capacity fails that `decode` with a fatal `DecoderError`.
-`AccessUnit` owns Annex B bytes, optional Annex B or hvcC configuration, and
-optional timing. Decimal strings preserve timestamp precision. No packet
-type, random-access flag, or discontinuity flag is required.
+`Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc)`
+requires an explicit positive number of pictures lent at once. A decoder
+decodes the one codec chosen at creation; this version decodes H.265 only, and
+an unknown codec value is invalid input. Hardware decoder creation occurs on
+the first sequence; an unsupported number of surfaces fails that `decode` with
+a fatal `DecoderError`. `AccessUnit` owns Annex B bytes, optional Annex B or
+hvcC configuration, optional timing and an optional `pixtreme_owner_t` record
+of the caller. Decimal strings preserve timestamp precision. No packet type,
+random-access flag, or discontinuity flag is required.
+
+The decoder retains an access unit's owner record once when it queues the
+input, never for an input it refuses before queueing, and releases it once
+when no picture of that input remains in the decoder and every frame made from
+it has been released. A `PixelBuffer` taken from such a frame does not delay
+the release. An input that yields no frame releases its owner within the
+operation that settles this; inputs left after a fatal error release theirs in
+`close`. Releases run outside the decoder's locks with `cudaStreamLegacy`, on
+the thread that calls `decode`, `discontinuity`, `flush` or `close`, or that
+releases the last frame. Frames show the record read-only through `owner()`.
 
 For same-size two-layer Scalable Main or Scalable Main 4:4:4 SHVC and two-view Multiview Main
 MV-HEVC, submit each complete AU with all its layers. The fixed
@@ -63,99 +89,175 @@ returns base-layer pictures through the single-layer decode path, including
 field pictures. Each output exposes read-only `nuh_layer_id()` (Python:
 `nuh_layer_id`); ordinary single-layer pictures also have layer ID zero.
 Output AU bytes, AU indices and timestamps refer to the complete original
-input, including NALs excluded from decoding. In C, the index and layer ID
-are appended int64 fields in `decoder_options` and `frame_info`; a shorter
-options `struct_size` omits the index and selects zero.
+input, including NALs excluded from decoding. In C, the index and the codec
+are trailing fields of `decoder_options`; a shorter options `struct_size`
+omits them and selects zero, which is H.265.
 
 Nonzero indices output the pictures selected by the VPS output flags,
 including sets that output both layers or only the upper SHVC layer. Pictures
 with the same POC are returned in increasing layer-ID order. Reference-only
-pictures are decoded without consuming output loans; the caller's surface
-capacity applies to the entire decoder. An index absent from a newly active
+pictures are decoded without lending a surface; the number of pictures lent
+at once applies to the entire decoder. An index absent from a newly active
 VPS reports its exact value and absence as a recoverable error. Later AUs
 using a VPS that contains the index can still be decoded.
 Scalable Main 4:4:4 accepts matching 8-bit 4:2:0, 4:2:2 or 4:4:4 layers,
-subject to the active GPU's NVDEC capability query. Its 4:4:4 pictures use
-YUV444 surfaces. Spatially different SHVC layers, unequal layer chroma
-formats, non-eight-bit Scalable Main 4:4:4, Scalable Main 10, ten-bit
-MV-HEVC, monochrome and more than two layers are rejected at parameter sets.
+subject to the active GPU's NVDEC capability query. Spatially different SHVC
+layers, unequal layer chroma formats, non-eight-bit Scalable Main 4:4:4,
+Scalable Main 10, ten-bit MV-HEVC, monochrome and more than two layers are
+rejected at parameter sets.
 
 `decode`, `discontinuity`, and `flush` return `DecodedFrame` values in display
-order with CUDA completion events. Wait on each event before reading its GPU
-arrays. Each frame's read-only `slice_type()` returns its first slice segment's
-HEVC value (0 = B, 1 = P, 2 = I). Read-only `nal_unit_type()` returns the
-picture's slice-segment NAL unit type as an integer, including IDR (19, 20),
-CRA (21), BLA (16–18), and non-IRAP types. Read-only `vui_timing()` returns an
-optional `VuiTiming` with the picture's SPS `num_units_in_tick` and `time_scale`
-as unsigned 32-bit integers. It returns `std::nullopt` when VUI is absent or
+order without waiting for GPU completion. A frame carries no CUDA event: the
+decoder records its writes on its streams as pixtreme use records of the
+picture's `PixelBuffer` and of each NDArray that `mv()` and `residual()`
+return, and a reader orders its stream after them. Metadata defined by H.265 syntax is
+optional: on H.265 frames only `vui_timing()` and `pic_struct()` can be empty,
+and every other field holds a value. Each frame's read-only `slice_type()`
+returns its first slice segment's HEVC value (0 = B, 1 = P, 2 = I). Read-only
+`nal_unit_type()` returns the picture's slice-segment NAL unit type as an
+integer, including IDR (19, 20), CRA (21), BLA (16–18), and non-IRAP types.
+Read-only `vui_timing()` returns the picture's SPS `num_units_in_tick` and
+`time_scale` as unsigned 32-bit integers, or no value when VUI is absent or
 does not signal timing; no default or frame-period conversion is applied.
-`picture` borrows an NVDEC surface with plane layout and
-optional VUI colour values. NV12/P016 describe 4:2:0, NV16/P216 describe 4:2:2,
-and YUV444/YUV444_16Bit describe three 4:4:4 planes. Two-byte samples store
-each plane's d significant bits at bits 16-d through 15, with zero lower bits.
-Use `bit_depth` for Y and `chroma_bit_depth` for Cb and Cr; storage determines
-the byte count of every sample even when the two depths differ.
-Its pointer and byte count span the coded surface. Its width, height, and
-plane dimensions describe the SPS conformance window. Read each plane from
-`pointer + plane.offset`, using its row and pixel strides; the Y offset can
-be nonzero, and chroma starts after the coded luma height. The Python boundary
-copies this display region into its owned pictures.
-Return the loan
-exactly once using `return_picture(lease, read_done_event)` after all GPU reads.
-The return operation waits for that event before unmap and remains available
-after the `Decoder` object is destroyed. `close()` stops new work immediately;
-unreturned loans keep NVDEC alive until their last return. When capacity is
-exhausted, input and unmapped pictures are deferred without waiting for a loan.
-Return loans, then call `decode` or `flush` to collect deferred pictures. Repeat
-`flush` until it returns an empty vector. `raw_mv()` returns the HEVC int32 motion
-array; `raw_residual()` returns int16 Y/Cb/Cr arrays, saturating the final
-reconstructed residuals to `[-32768, 32767]`. RDPCM and cross-component
-prediction complete before saturation; cross-component prediction uses
-unsaturated Y. `mv()` returns the processed
-float32 motion array `(2, H, W)`, and `residual()` returns the processed float32
-residual `(1, H, W)`. `residual()` divides the same saturated Y residuals by the
-picture's SPS VUI luma range: `219 * 2^(bit_depth - 8)` for limited or
-unsignalled range, and `255 * 2^(bit_depth - 8)` for full range.
-`mv()` and `residual()` produce the values of version 4 of the
-pixtreme.transport `hevc-mv-residual` profile.
-`raw_residual()`, `mv()`, and `residual()` allocate
-independent arrays on every call,
-with their own completion events. Keep arrays alive until GPU reads finish.
-`close()` never waits for a caller to return a loan. When no loans remain, it
-finishes its own GPU work and driver resource release before returning.
-Host completion waits query CUDA events and sleep for 50 microseconds between
-pending queries, including picture returns and resource cleanup.
+`field_seq_flag()` is zero for an SPS without VUI, as H.265 specifies.
+
+Each frame holds one reference to its picture. `take_picture()` (C:
+`pixtreme_transport_nvdec_frame_take_picture`) moves that reference to the
+caller once, as a `pixtreme::pixel_buffer` that lends the NVDEC surface
+without a copy; a second take is a recoverable `InvalidState` error. The
+`PixelBuffer` declares its pixtreme format, bit depth and alignment, the
+offset and pitch of each plane, and the display size. 4:2:0 pictures use
+`nv12`, `p010` and `p012`; 4:2:2 pictures use `nv16`, `p210` and `p212`; 4:4:4
+pictures use `yuv444p`, `yuv444p10msb` and `yuv444p12msb`. Two-byte samples
+store d significant bits at bits 16-d through 15, with zero lower bits. The
+surface holds the whole coded picture, and each plane's offset points at the
+display region's top left. Its use records order reads after the decoder's
+writes. Its colour declaration converts the picture's SPS VUI
+`colour_primaries`, `transfer_characteristics`, `matrix_coeffs` and
+`video_full_range_flag` to pixtreme tokens with pixtreme's H.273 conversion
+(`pixtreme_color_h273_to_token`). A value the VUI does not signal, or a code
+without a pixtreme token, stays unknown (null, `None` in Python) rather than a
+default. A 4:2:0 picture's siting comes from `chroma_sample_loc_type_top_field`,
+or from `chroma_sample_loc_type_bottom_field` for a field picture whose
+`pic_struct` names the bottom field (2, 10 or 12); it is unknown when the VUI
+signals no chroma location, and for 4:2:2 and 4:4:4 pictures.
+Streams whose luma and chroma bit depths differ are refused as a
+capability shortfall, because a `PixelBuffer` has one bit depth.
+
+There is no return operation. Release the `PixelBuffer`'s last reference on
+the stream of its last read (`pixel_buffer::release(stream)` or
+`pixtreme_pixel_buffer_release`); the decoder unmaps the surface once that
+stream's preceding work completes, and only then reuses it. The destructor and
+`pixtreme_pixel_buffer_destroy` release on the legacy default stream, so after
+a last read on another stream, confirm on the host that the read finished
+first. Releasing every reference to a frame whose picture was not taken returns
+its surface as well. A taken `PixelBuffer` stays valid after its frame and the
+decoder are released or closed. When every surface is lent, `decode` succeeds
+and defers output without waiting for a return; after releasing a picture, call
+`decode` or `flush` to collect deferred pictures. Repeat `flush` until it
+returns an empty vector.
+
+`is_supported(device, codec, chroma_format, bit_depth, width, height)` (C:
+`pixtreme_transport_nvdec_is_supported`) answers whether the device's NVDEC
+can decode that codec, chroma format, luma bit depth and coded size and the
+decoder can lend such a picture, applying the same conditions as the decode
+errors with the reason `Unsupported`. Conditions decided while parsing, such
+as the decode surface count, output layer sets and stream forms excluded by
+design, are left to `decode`.
+
+`mv()` (C: `pixtreme_transport_nvdec_frame_mv`) returns the processed
+float32 motion array `(2, H, W)`, and `residual()` (C:
+`pixtreme_transport_nvdec_frame_residual`) returns the processed float32
+residual `(1, H, W)`, each as a new `pixtreme::ndarray` (C:
+`pixtreme_ndarray_t`) in memory allocated for that call alone, so writing it
+never changes a later result. `residual()` divides the picture's signed luma
+residual before prediction, saturated to `[-32768, 32767]` after RDPCM and
+cross-component prediction, by the picture's SPS VUI luma range:
+`219 * 2^(bit_depth - 8)` for limited or unsignalled range, and
+`255 * 2^(bit_depth - 8)` for full range. `mv()` and `residual()` produce the
+values of version 4 of the pixtreme.transport `hevc-mv-residual` profile. The
+call does not wait for the decoder's write, which the NDArray's use records
+hold. Before reading on another CUDA stream, order that stream after the write
+(`wait`), record the reads (`record_stream`), and release the last reference on
+the stream of the last read (`release(stream)` or `pixtreme_ndarray_release`):
+the decoder frees the memory after that stream's preceding work and never
+waits for it on the host. The release orders the release stream after the
+decoder's write, so work queued later on that stream waits for the write even
+when the array was released without a read. The destructor and `pixtreme_ndarray_destroy`
+release on the legacy default stream, so after a last read on another stream,
+confirm on the host that the read finished first. The NDArray stays valid
+after its frame and the decoder are released or closed.
+
+`mv()` and `residual()` are the decoder's only motion and residual outputs.
+The H.265 motion and the int16 Y, Cb and Cr residuals they are computed from
+belong to no public interface; the tests read them through an uninstalled
+verification binding to compare the decoder with HM, SHM and HTM. Both
+operations stay available while the frame is valid, whether or not its
+surface has been returned.
+
+`close()` does not wait for lent pictures: it stops decoding and lending and
+frees the resources that are not lent. The surface of a `PixelBuffer` still
+referenced is neither reused nor unmapped until its last release; the decoder
+then unmaps it after the release stream's work and frees the rest, NVDEC
+included. Destroying the NVDEC decoder can block the host until GPU work
+queued in the same CUDA context finishes. Host completion waits query CUDA
+events or streams and sleep for 50 microseconds between pending queries.
 
 ## Python API
 
-The Python boundary calls the C ABI through the C++ wrapper, copies each borrowed surface into
-owned CuPy Y/Cb/Cr planes, returns the surface after the copy, and waits for
-completion before returning a tuple of pictures:
+The Python boundary calls the C ABI through the C++ wrapper and waits for the
+writes in each picture's use records before returning a tuple of
+`PictureRecord` objects in display order:
 
 ```python
 from pixtreme.transport.nvdec import DecoderSession
 
-with DecoderSession(threads=0, device=0, output_layer_set_index=0) as decoder:
-    pictures = decoder.decode(
+with DecoderSession(threads=0, device=0, output_layer_set_index=0,
+                    output_surfaces=4, codec="hevc") as decoder:
+    for record in decoder.decode(
         access_unit_bytes,
         configuration=configuration_bytes,  # optional
         configuration_format="annexb",       # or "hvcc"
         pts=None, dts=None, duration=None, time_base=(1, 90000),
-    )
-    pictures += decoder.flush()
+    ):
+        picture = record.take_picture()  # a pixtreme.PixelBuffer
 ```
 
+`output_surfaces` is required and names the number of pictures the decoder can
+lend at once. `codec` defaults to `"hevc"`, the only codec name of this
+version; another name raises `DecoderError` with reason `"invalid_input"`.
 `decode` accepts CPU bytes, bytearray, or memoryview. Missing timing stays
 missing; `time_base` is an optional integer `(numerator, denominator)` tuple.
 Call `discontinuity()` before the first AU after a transport interruption.
-Pictures expose metadata, including read-only `slice_type` with the same HEVC
+
+`take_picture()` moves the record's picture to the caller once, as a
+`pixtreme.PixelBuffer` that lends the NVDEC surface without a copy; a second
+call raises `DecoderError` with reason `"invalid_state"`. Reading attributes,
+including `repr`, leaves the picture in the record. The surface returns when
+the PixelBuffer's last reference is released, or when a record whose picture
+was not taken is released. While `output_surfaces` pictures are lent, `decode`
+and `flush` hold later pictures back; release one and call `decode` or `flush`
+again, until `flush` returns an empty tuple. A PixelBuffer stays valid after
+`close()` and after the session is released.
+
+Records expose metadata, including read-only `slice_type` with the same HEVC
 values, read-only integer `nal_unit_type`, and read-only `vui_timing` as an
 integer `(num_units_in_tick, time_scale)` tuple or `None` when not signalled,
-plus `pictures` and the functions
-`raw_mv()`, `raw_residual()`, `mv()`, and `residual()`. The raw functions expose
-HEVC values; the processed functions provide the primary output.
-The Python API has no surface loan or return operation and does not import the
-transport core. `DecoderError` has `reason` and `fatal` attributes.
+plus the functions `mv()` and `residual()`.
+Fields defined by H.265 syntax are typed as optional; H.265 records show a
+value in each of them, except `vui_timing` and `pic_struct` when not signalled.
+`mv()` and `residual()` return the wrapper's NDArrays as float32
+`pixtreme.NDArray` values after the writes in their use records complete, and
+are the only motion and residual outputs. The Python API does not import the
+transport core and does not take an owner record.
+
+`is_supported(codec, chroma_format, bit_depth, width, height, device=0)`
+answers whether the device's NVDEC can decode such a stream and the decoder
+can lend its pictures; `chroma_format` is `"4:0:0"`, `"4:2:0"`, `"4:2:2"` or
+`"4:4:4"`, and `width` and `height` are the coded size. `DecoderError` has
+`reason` (`"invalid_input"`, `"invalid_state"`, `"unsupported"`,
+`"concurrent_operation"` or `"driver_failure"`) and `fatal` attributes;
+`"unsupported"` reports the capability shortfall that `is_supported` answers.
 
 For a stream with SPS `field_seq_flag=1`, each output contains one field's
 rows at that field picture's display dimensions. Output remains in display
@@ -175,7 +277,6 @@ vector divided by 4 and by the POC distance. Opposite field parity does not
 add a half-row correction. Two usable lists are averaged; one contributes
 alone, and no usable list produces zero (SP-HEVCDEC-105). Only same-layer
 temporal references with a known full POC and a nonzero POC distance contribute.
-Inter-layer vectors and references remain available in the raw motion output.
 
 ## Licenses
 
