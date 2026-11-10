@@ -1,6 +1,6 @@
 # pixtreme-transport-nvdec
 
-`pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming H.265 decoder for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each picture (a frame or a field) it delivers the decoded pixels, motion vectors and prediction residual together. The decoder accepts complete Annex B access units, independently of the protocol or file format carrying the stream.
+`pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming H.265 and H.264 decoder for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each H.265 picture (a frame or a field) it delivers the decoded pixels, motion vectors and prediction residual together; for each H.264 frame it delivers the decoded pixels. The decoder accepts complete Annex B access units, independently of the protocol or file format carrying the stream.
 
 One wheel includes the Python binding, `libpixtreme_nvdec.so`, public C headers, a header-only C++ wrapper and CMake package configuration. Python, C and C++ callers borrow each decoded picture as a pixtreme `PixelBuffer` without a copy.
 
@@ -64,11 +64,12 @@ C++ compiler and standard library.
 In the C++ wrapper,
 `Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc)`
 requires an explicit positive number of pictures lent at once. A decoder
-decodes the one codec chosen at creation; this version decodes H.265 only, and
-an unknown codec value is invalid input. Hardware decoder creation occurs on
+decodes the one codec chosen at creation; this version decodes H.265
+(`Codec::Hevc`) and H.264 (`Codec::H264`), and an unknown codec value is invalid
+input. `output_layer_set_index` applies to H.265 and must be zero for H.264. Hardware decoder creation occurs on
 the first sequence; an unsupported number of surfaces fails that `decode` with
-a fatal `DecoderError`. `AccessUnit` owns Annex B bytes, optional Annex B or
-hvcC configuration, optional timing and an optional `pixtreme_owner_t` record
+a fatal `DecoderError`. `AccessUnit` owns Annex B bytes, optional Annex B,
+hvcC (H.265) or avcC (H.264) configuration, optional timing and an optional `pixtreme_owner_t` record
 of the caller. Decimal strings preserve timestamp precision. No packet type,
 random-access flag, or discontinuity flag is required.
 
@@ -112,7 +113,10 @@ decoder records its writes on its streams as pixtreme use records of the
 picture's `PixelBuffer` and of each NDArray that `mv()` and `residual()`
 return, and a reader orders its stream after them. Metadata defined by H.265 syntax is
 optional: on H.265 frames only `vui_timing()` and `pic_struct()` can be empty,
-and every other field holds a value. Each frame's read-only `slice_type()`
+and every other field holds a value; H.264 frames hold none of them, and their
+`mv()` and `residual()` throw a recoverable `InvalidState` error. An H.264
+stream whose fields are separate pictures passes one field's access unit per
+call; the frame of two fields carries its first field's input values. Each frame's read-only `slice_type()`
 returns its first slice segment's HEVC value (0 = B, 1 = P, 2 = I). Read-only
 `nal_unit_type()` returns the picture's slice-segment NAL unit type as an
 integer, including IDR (19, 20), CRA (21), BLA (16–18), and non-IRAP types.
