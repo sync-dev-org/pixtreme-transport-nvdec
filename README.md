@@ -170,13 +170,15 @@ than sequential Huffman (baseline and extended) ones, such as progressive images
 which NVDEC does not decode, are refused as a capability shortfall.
 After a VP8, VP9 or AV1 frame is refused as a capability shortfall, subsequent inputs are
 refused as `unsupported` until a key frame initializes all saved decoding
-state. A VP9 non-key frame whose width or height exceeds the last accepted key
-frame's width or height is refused this way, even if the decoder reserved more
-space. Intra-only frames do not resume decoding after this refusal. A frame
-that shows again a picture of another size than its owning decoder's current
-output is refused for that input alone; this does not start a wait for a key
-frame. Discontinuities retain their existing invalid-input classification for
-frames that refer to discarded references.
+state or `discontinuity()` discards the references. A non-key frame that needs
+the NVDEC decoder to be recreated, and a VP9 non-key frame whose width or
+height exceeds the last accepted key frame's width or height, are refused this
+way, even if the decoder reserved more space; a discontinuity also forgets the
+last accepted key frame's size. Intra-only frames do not resume decoding after
+this refusal. A frame that shows again a picture of another size than its
+owning decoder's current output is refused for that input alone; this does not
+start a wait for a key frame. After a discontinuity, frames that refer to
+discarded references are refused as invalid input.
 
 There is no return operation. Release the `PixelBuffer`'s last reference on
 the stream of its last read (`pixel_buffer::release(stream)` or
