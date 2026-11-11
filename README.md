@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.12.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.14.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
