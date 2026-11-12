@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.14.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.17.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
@@ -33,6 +33,76 @@ directory to `CMAKE_PREFIX_PATH`, then use:
 find_package(pixtreme_transport_nvdec CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE pixtreme::transport_nvdec)
 ```
+
+### Get the native SDK with Conan
+
+Each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases)
+also provides a prebuilt Linux x86_64 SDK and its Conan recipe. C and C++
+consumers obtain both the decoder and pixtreme through Conan, without
+installing their Python wheels or compiling either library. The SDK retains
+the wheel's CMake package and `pixtreme::transport_nvdec` target.
+
+For example, obtain the 0.9.0 recipe and its pixtreme 2.17.0 dependency below.
+Use the Conan CLI version recorded in `recipes.json` (2.34.0 for this release).
+The decoder recipe's `conandata.yml` and `release.json` record its required
+pixtreme SDK version; use that version's pixtreme recipe archive when updating.
+Run the commands in a new directory with Conan on `PATH`:
+
+```bash
+nvdec_version=0.9.0
+pixtreme_version=2.17.0
+nvdec_release="https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases/download/v$nvdec_version"
+pixtreme_release="https://github.com/sync-dev-org/pixtreme/releases/download/v$pixtreme_version"
+mkdir nvdec-recipes pixtreme-recipes
+(
+    cd nvdec-recipes
+    curl -fsSLO "$nvdec_release/SHA256SUMS"
+    curl -fsSLO "$nvdec_release/pixtreme_transport_nvdec-$nvdec_version-recipes.tar.gz"
+    sha256sum --check --ignore-missing SHA256SUMS
+    tar -xzf "pixtreme_transport_nvdec-$nvdec_version-recipes.tar.gz"
+    conan export pixtreme-transport-nvdec --version "$nvdec_version"
+)
+(
+    cd pixtreme-recipes
+    curl -fsSLO "$pixtreme_release/SHA256SUMS"
+    curl -fsSLO "$pixtreme_release/pixtreme-recipes-$pixtreme_version.tar.gz"
+    sha256sum --check --ignore-missing SHA256SUMS
+    tar -xzf "pixtreme-recipes-$pixtreme_version.tar.gz"
+    conan export pixtreme --version "$pixtreme_version"
+)
+```
+
+In your application's `conanfile.txt`, request the decoder by a lower bound:
+
+```ini
+[requires]
+pixtreme-transport-nvdec/[>=0.9.0]
+
+[generators]
+CMakeDeps
+CMakeToolchain
+```
+
+After creating a Conan profile with `conan profile detect` if needed, install
+the SDKs and configure your application:
+
+```bash
+conan install . --build=missing --output-folder=build -s build_type=Release
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake
+cmake --build build
+```
+
+The recipes fetch the SDK archives by URL and verify their SHA256 values.
+They support only shared libraries and require pixtreme by a lower bound.
+For deployment, combine the SDK package contents in one prefix, preserving
+`pixtreme/transport/nvdec/libpixtreme_nvdec.so` and
+`pixtreme/core/lib/libpixtreme.so.2`. The decoder keeps its wheel filename,
+SONAME and relative `$ORIGIN` runtime paths. Each process loads one pixtreme
+shared library. Native applications need neither a Python runtime environment
+nor CUDA SDK headers; decoding still needs the GPU and driver described above.
+
+### Use the public interfaces
 
 C callers check `pixtreme_transport_nvdec_abi_version()` against
 `PIXTREME_TRANSPORT_NVDEC_ABI_VERSION` before other library calls. C++ callers
