@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.20.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.21.0` dependency from PyPI. CuPy is not a dependency of this package; it is installed as a dependency of pixtreme. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
@@ -40,12 +40,12 @@ Each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/r
 provides a prebuilt Linux x86_64 SDK. C and C++ applications can use its
 installed CMake package without installing Python wheels or compiling either
 library. Obtain pixtreme's SDK separately and extract both SDKs into one prefix.
-For a release built with pixtreme 2.20.0, run the following commands in a new
+For a release built with pixtreme 2.21.0, run the following commands in a new
 directory, replacing `X.Y.Z` with the decoder release version:
 
 ```bash
 nvdec_version=X.Y.Z
-pixtreme_version=2.20.0
+pixtreme_version=2.21.0
 nvdec_release="https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases/download/v$nvdec_version"
 pixtreme_release="https://github.com/sync-dev-org/pixtreme/releases/download/v$pixtreme_version"
 native_prefix="$PWD/native-sdk"
