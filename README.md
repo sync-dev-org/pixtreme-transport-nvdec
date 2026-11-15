@@ -178,7 +178,9 @@ field's unit per call; the frame of two fields carries its first field's input
 values. As libvpx and libaom output, a VP9 input returns its last frame when
 that frame is shown, and an AV1 temporal unit the last frame it shows; a hidden
 frame returns none, and a frame shown again with `show_existing_frame` carries
-the input values of the call that shows it. Each frame's read-only `slice_type()`
+the input values of the call that shows it. Its `PixelBuffer` shares a single
+map with earlier loans of that picture, while each loan uses its own lending
+slot and each frame keeps its own input values. Each frame's read-only `slice_type()`
 returns its first slice segment's HEVC value (0 = B, 1 = P, 2 = I). Read-only
 `nal_unit_type()` returns the picture's slice-segment NAL unit type as an
 integer, including IDR (19, 20), CRA (21), BLA (16–18), and non-IRAP types.
@@ -229,8 +231,9 @@ discarded references are refused as invalid input.
 
 There is no return operation. Release the `PixelBuffer`'s last reference on
 the stream of its last read (`pixel_buffer::release(stream)` or
-`pixtreme_pixel_buffer_release`); the decoder unmaps the surface once that
-stream's preceding work completes, and only then reuses it. The destructor and
+`pixtreme_pixel_buffer_release`); the decoder unmaps the surface once every
+loan of that picture is returned and all release streams' preceding work
+completes, and only then reuses it. The destructor and
 `pixtreme_pixel_buffer_destroy` release on the legacy default stream, so after
 a last read on another stream, confirm on the host that the read finished
 first. Releasing every reference to a frame whose picture was not taken returns
@@ -238,9 +241,11 @@ its surface as well. A taken `PixelBuffer` stays valid after its frame and the
 decoder are released or closed. When every surface is lent, `decode` succeeds
 and defers output without waiting for a return; after releasing a picture, call
 `decode` or `flush` to collect deferred pictures. A VP9 or AV1 frame that shows
-again a picture whose earlier `PixelBuffer` is still held is deferred the same
-way, since NVDEC maps a decoded picture once at a time. Repeat `flush` until it
-returns an empty vector.
+a picture again, and later frames, are delivered in display order while a
+lending slot is available, even if an earlier `PixelBuffer` of that picture is
+still held. The shared map is unmapped once all these `PixelBuffer`s are
+returned and all their release streams' work has finished. Repeat `flush`
+until it returns an empty vector.
 
 `is_supported(device, codec, chroma_format, bit_depth, width, height)` (C:
 `pixtreme_transport_nvdec_is_supported`) answers whether the device's NVDEC
