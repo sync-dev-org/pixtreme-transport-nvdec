@@ -1,6 +1,6 @@
 # pixtreme-transport-nvdec
 
-`pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming decoder of H.265, H.264, VP8, VP9, AV1, MPEG-1, MPEG-2, MPEG-4 Part 2, VC-1 and JPEG for [pixtreme](https://github.com/sync-dev-org/pixtreme). For each H.265 picture (a frame or a field) it delivers the decoded pixels, motion vectors and prediction residual together; for each picture of the other codecs it delivers the decoded pixels. The decoder accepts each codec's unit of one picture (a complete Annex B access unit for H.265 and H.264, a frame for VP8 and VP9, a temporal unit for AV1), independently of the protocol or file format carrying the stream.
+`pixtreme-transport-nvdec` provides `pixtreme.transport.nvdec`, a streaming decoder of H.265, H.264, VP8, VP9, AV1, MPEG-1, MPEG-2, MPEG-4 Part 2, VC-1 and JPEG for [pixtreme](https://github.com/sync-dev-org/pixtreme). It delivers the decoded pixels for each picture (a frame or, for H.265 field streams, a field). H.265 decoders also deliver motion vectors and prediction residual when requested at creation. The decoder accepts each codec's unit of one picture (a complete Annex B access unit for H.265 and H.264, a frame for VP8 and VP9, a temporal unit for AV1), independently of the protocol or file format carrying the stream.
 
 One wheel includes the Python binding, `libpixtreme_nvdec.so`, public C headers, a header-only C++ wrapper and CMake package configuration. Python, C and C++ callers borrow each decoded picture as a pixtreme `PixelBuffer` without a copy.
 
@@ -20,7 +20,7 @@ The wheels support Linux x86_64 with glibc 2.28 or later (`manylinux_2_28_x86_64
 
 ## C and C++ APIs
 
-The shared library exposes C ABI version 8 through
+The shared library exposes C ABI version 9 through
 `pixtreme/nvdec/c/decoder.h`. The header-only C++17 wrapper is
 `pixtreme/nvdec/decoder.hpp`. Both interfaces are independent of the transport
 core and require no CUDA SDK headers. They lend each picture as a
@@ -95,21 +95,16 @@ excludes by design use `INVALID_INPUT`. Release owned handles with
 borrowed views and the required prefixes of sized records. The C++ wrapper
 translates errors into `DecoderError` and manages references.
 
-Rebuild native consumers against the ABI 8 headers and library together.
-ABI 8 replaces the decoder's own picture description, loan identifiers and
-return operations with pixtreme's `PixelBuffer`, returns `mv()` and
-`residual()` as pixtreme NDArrays, removes the H.265 motion and residual
-operations (`raw_mv()`, `raw_residual()`) together with the decoder's own
-array type, replaces the frame's CUDA completion event
-with pixtreme use records, and adds the codec chosen at creation, an optional
-owner record per access unit, the capability-shortfall reason, a support
-query, and a presence flag for each H.265 metadata field.
+Rebuild native consumers against the ABI 9 headers and library together.
+ABI 9 adds the creation option `output_motion_and_residual` and disables
+H.265 motion and residual output by default. Consumers using those outputs
+must explicitly enable the option.
 C++ callers compile the wrapper into their own binary. C callers use the
 `pixtreme_transport_nvdec_` functions directly. Consumers may use their own
 C++ compiler and standard library.
 
 In the C++ wrapper,
-`Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc)`
+`Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc, output_motion_and_residual=false)`
 requires an explicit positive number of pictures lent at once. A decoder
 decodes the one codec chosen at creation; this version decodes H.265
 (`Codec::Hevc`), H.264 (`Codec::H264`), VP8 (`Codec::Vp8`), VP9 (`Codec::Vp9`),
@@ -130,6 +125,16 @@ STRUCT_C and STRUCT_A as `CodecConfigurationFormat::Rcv` for VC-1 Simple and
 Main), optional timing and an optional `pixtreme_owner_t` record of the caller.
 Bytes that hold more than one unit are invalid input. Decimal strings preserve timestamp precision. No packet type,
 random-access flag, or discontinuity flag is required.
+
+Set `output_motion_and_residual=true` to produce H.265 motion vectors and
+residual. The default skips CABAC analysis, its uploads and the motion and
+residual GPU work. `mv()` and `residual()` then return a recoverable
+`InvalidState` error, and the picture remains usable. `missing_slices` and
+`faulty_reference` have no value; `missing_reference` is still reported from
+the reference picture sets. Other codecs accept and ignore the option. In C,
+the trailing `int64_t output_motion_and_residual` field uses 0 to disable and
+any nonzero value to enable output. A structure too small to contain the
+complete field defaults to 0, including the previous 40-byte structure.
 
 The decoder retains an access unit's owner record once when it queues the
 input, never for an input it refuses before queueing, and releases it once
@@ -170,8 +175,9 @@ order without waiting for GPU completion. A frame carries no CUDA event: the
 decoder records its writes on its streams as pixtreme use records of the
 picture's `PixelBuffer` and of each NDArray that `mv()` and `residual()`
 return, and a reader orders its stream after them. Metadata defined by H.265 syntax is
-optional: on H.265 frames only `vui_timing()` and `pic_struct()` can be empty,
-and every other field holds a value; frames of the other codecs hold none of
+optional: on H.265 frames `vui_timing()` and `pic_struct()` can be empty,
+and `missing_slices` and `faulty_reference` are empty when analysis was not
+requested. Every other H.265 field holds a value; frames of the other codecs hold none of
 them, and their `mv()` and `residual()` throw a recoverable `InvalidState`
 error. An H.264 or MPEG-2 stream whose fields are separate pictures passes one
 field's unit per call; the frame of two fields carries its first field's input
@@ -303,7 +309,8 @@ writes in each picture's use records before returning a tuple of
 from pixtreme.transport.nvdec import DecoderSession
 
 with DecoderSession(threads=0, device=0, output_layer_set_index=0,
-                    output_surfaces=4, codec="hevc") as decoder:
+                    output_surfaces=4, codec="hevc",
+                    output_motion_and_residual=False) as decoder:
     for record in decoder.decode(
         access_unit_bytes,
         configuration=configuration_bytes,  # optional
@@ -318,6 +325,11 @@ lend at once. `codec` defaults to `"hevc"`; the other names are `"h264"`,
 `"vp8"`, `"vp9"`, `"av1"`, `"mpeg1"`, `"mpeg2"`, `"mpeg4"` (MPEG-4 Part 2),
 `"vc1"` and `"jpeg"`, and another
 name raises `DecoderError` with reason `"invalid_input"`.
+The keyword `output_motion_and_residual` defaults to `False`. Set it to
+`True` when using H.265 `mv()` or `residual()`. Without it, both operations
+raise a recoverable `DecoderError` with reason `"invalid_state"`,
+`missing_slices` and `faulty_reference` are `None`, and the picture and
+`missing_reference` remain available. Other codecs ignore the keyword.
 `decode` accepts CPU bytes, bytearray, or memoryview. Missing timing stays
 missing; `time_base` is an optional integer `(numerator, denominator)` tuple.
 Call `discontinuity()` before the first AU after a transport interruption.
