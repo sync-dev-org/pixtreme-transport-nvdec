@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.27.4` dependency from PyPI. CuPy is not a dependency of this package or of pixtreme; install it yourself only when your own code uses CuPy arrays. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.28.0` dependency from PyPI. CuPy is not a dependency of this package or of pixtreme; install it yourself only when your own code uses CuPy arrays. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
@@ -40,12 +40,12 @@ Each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/r
 provides a prebuilt Linux x86_64 SDK. C and C++ applications can use its
 installed CMake package without installing Python wheels or compiling either
 library. Obtain pixtreme's SDK separately and extract both SDKs into one prefix.
-For a release built with pixtreme 2.27.4, run the following commands in a new
+For a release built with pixtreme 2.28.0, run the following commands in a new
 directory, replacing `X.Y.Z` with the decoder release version:
 
 ```bash
 nvdec_version=X.Y.Z
-pixtreme_version=2.27.4
+pixtreme_version=2.28.0
 nvdec_release="https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases/download/v$nvdec_version"
 pixtreme_release="https://github.com/sync-dev-org/pixtreme/releases/download/v$pixtreme_version"
 native_prefix="$PWD/native-sdk"
@@ -104,6 +104,13 @@ C++ callers compile the wrapper into their own binary. C callers use the
 C++ compiler and standard library.
 
 In the C++ wrapper,
+`codec_name(Codec)` returns the codec's lowercase creation name as a borrowed
+static `const char*`, or `nullptr` for an unknown value. C callers use
+`pixtreme_transport_nvdec_codec_name(int32_t codec)`, which returns `NULL` for
+unknown values. Neither operation creates a decoder or initializes CUDA, and
+the caller must not modify or free the string. The library defines the names
+once for C, C++ and Python; this addition keeps ABI version 9.
+
 `Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc, output_motion_and_residual=false)`
 requires an explicit positive number of pictures lent at once. A decoder
 decodes the one codec chosen at creation; this version decodes H.265
@@ -354,6 +361,12 @@ value in each of them, except `vui_timing` and `pic_struct` when not signalled.
 `pixtreme.NDArray` values after the writes in their use records complete, and
 are the only motion and residual outputs. The Python API does not import the
 transport core and does not take an owner record.
+
+`codec_name(codec: int) -> str | None` returns the lowercase creation name for
+numeric codec values 0 through 9 (`hevc`, `h264`, `vp8`, `vp9`, `av1`, `mpeg1`,
+`mpeg2`, `mpeg4`, `vc1`, `jpeg`), or `None` for an unknown value. It needs no
+decoder or CUDA context. Creation and the support query use this same library
+operation to recognize codec names.
 
 `is_supported(codec, chroma_format, bit_depth, width, height, device=0)`
 answers whether the device's NVDEC can decode such a stream and the decoder
