@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.28.0` dependency from PyPI. CuPy is not a dependency of this package or of pixtreme; install it yourself only when your own code uses CuPy arrays. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.30.0` dependency from PyPI. CuPy is not a dependency of this package or of pixtreme; install it yourself only when your own code uses CuPy arrays. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
@@ -40,12 +40,12 @@ Each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/r
 provides a prebuilt Linux x86_64 SDK. C and C++ applications can use its
 installed CMake package without installing Python wheels or compiling either
 library. Obtain pixtreme's SDK separately and extract both SDKs into one prefix.
-For a release built with pixtreme 2.28.0, run the following commands in a new
+For a release built with pixtreme 2.30.0, run the following commands in a new
 directory, replacing `X.Y.Z` with the decoder release version:
 
 ```bash
 nvdec_version=X.Y.Z
-pixtreme_version=2.28.0
+pixtreme_version=2.30.0
 nvdec_release="https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases/download/v$nvdec_version"
 pixtreme_release="https://github.com/sync-dev-org/pixtreme/releases/download/v$pixtreme_version"
 native_prefix="$PWD/native-sdk"
@@ -94,6 +94,16 @@ excludes by design use `INVALID_INPUT`. Release owned handles with
 `pixtreme_transport_nvdec_handle_release()`; the public C headers document
 borrowed views and the required prefixes of sized records. The C++ wrapper
 translates errors into `DecoderError` and manages references.
+
+`pixtreme_transport_nvdec_frame_info` appends `has_profile`,
+`general_profile_idc` (`int32_t`) and `general_profile_compatibility_flags`
+(`uint32_t`). On H.265 frames these are the SPS profile syntax used for that
+picture, including inherited VPS values for a multilayer SPS, whether or not
+motion and residual output is enabled. `has_profile` is zero for other codecs.
+Compatibility flag `general_profile_compatibility_flag[j]` occupies bit j of
+the mask. Interpret the values using H.265 Annex A; the decoder does not infer
+profile names. ABI version remains 9, and callers with the previous record's
+`struct_size` receive only their original fields.
 
 Rebuild native consumers against the ABI 9 headers and library together.
 ABI 9 adds the creation option `output_motion_and_residual` and disables
@@ -197,6 +207,12 @@ slot and each frame keeps its own input values. Each frame's read-only `slice_ty
 returns its first slice segment's HEVC value (0 = B, 1 = P, 2 = I). Read-only
 `nal_unit_type()` returns the picture's slice-segment NAL unit type as an
 integer, including IDR (19, 20), CRA (21), BLA (16–18), and non-IRAP types.
+Read-only `general_profile_idc()` and `general_profile_compatibility_flags()`
+return the picture's SPS values as `std::optional<int>` and
+`std::optional<std::uint32_t>`. Compatibility flag j is bit j. Both hold a
+value for H.265, including fields and each output layer, and no value for
+other codecs. H.265 Annex A defines their interpretation; the decoder does
+not infer profile names.
 Read-only `vui_timing()` returns the picture's SPS `num_units_in_tick` and
 `time_scale` as unsigned 32-bit integers, or no value when VUI is absent or
 does not signal timing; no default or frame-period conversion is applied.
@@ -355,6 +371,12 @@ Records expose metadata, including read-only `slice_type` with the same HEVC
 values, read-only integer `nal_unit_type`, and read-only `vui_timing` as an
 integer `(num_units_in_tick, time_scale)` tuple or `None` when not signalled,
 plus the functions `mv()` and `residual()`.
+Read-only `general_profile_idc` and `general_profile_compatibility_flags` are
+integers from that picture's SPS, with compatibility flag j at bit j, or
+`None` for codecs other than H.265. They remain available without motion and
+residual output, for field pictures and for every output layer, including
+multilayer SPS values inherited from VPS. Interpret them using H.265 Annex A;
+the decoder does not infer profile names.
 Fields defined by H.265 syntax are typed as optional; H.265 records show a
 value in each of them, except `vui_timing` and `pic_struct` when not signalled.
 `mv()` and `residual()` return the wrapper's NDArrays as float32
