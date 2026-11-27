@@ -12,7 +12,7 @@ Install from PyPI:
 pip install pixtreme-transport-nvdec
 ```
 
-For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.30.0` dependency from PyPI. CuPy is not a dependency of this package or of pixtreme; install it yourself only when your own code uses CuPy arrays. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
+For a uv project, use `uv add pixtreme-transport-nvdec`. The installer resolves the `pixtreme>=2.31.1` dependency from PyPI. CuPy is not a dependency of this package or of pixtreme; install it yourself only when your own code uses CuPy arrays. The transport core is not required for the decoder's Python API. The same wheel is also attached to each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases) with its SHA-256 checksum.
 
 ## Supported environments
 
@@ -40,12 +40,12 @@ Each [GitHub Release](https://github.com/sync-dev-org/pixtreme-transport-nvdec/r
 provides a prebuilt Linux x86_64 SDK. C and C++ applications can use its
 installed CMake package without installing Python wheels or compiling either
 library. Obtain pixtreme's SDK separately and extract both SDKs into one prefix.
-For a release built with pixtreme 2.30.0, run the following commands in a new
+For a release built with pixtreme 2.31.1, run the following commands in a new
 directory, replacing `X.Y.Z` with the decoder release version:
 
 ```bash
 nvdec_version=X.Y.Z
-pixtreme_version=2.30.0
+pixtreme_version=2.31.1
 nvdec_release="https://github.com/sync-dev-org/pixtreme-transport-nvdec/releases/download/v$nvdec_version"
 pixtreme_release="https://github.com/sync-dev-org/pixtreme/releases/download/v$pixtreme_version"
 native_prefix="$PWD/native-sdk"
@@ -121,7 +121,7 @@ unknown values. Neither operation creates a decoder or initializes CUDA, and
 the caller must not modify or free the string. The library defines the names
 once for C, C++ and Python; this addition keeps ABI version 9.
 
-`Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc, output_motion_and_residual=false)`
+`Decoder(device, output_surfaces, threads=0, output_layer_set_index=0, codec=Codec::Hevc, output_motion_and_residual=false, color_fallback={})`
 requires an explicit positive number of pictures lent at once. A decoder
 decodes the one codec chosen at creation; this version decodes H.265
 (`Codec::Hevc`), H.264 (`Codec::H264`), VP8 (`Codec::Vp8`), VP9 (`Codec::Vp9`),
@@ -142,6 +142,13 @@ STRUCT_C and STRUCT_A as `CodecConfigurationFormat::Rcv` for VC-1 Simple and
 Main), optional timing and an optional `pixtreme_owner_t` record of the caller.
 Bytes that hold more than one unit are invalid input. Decimal strings preserve timestamp precision. No packet type,
 random-access flag, or discontinuity flag is required.
+The decoder uses a unit's configuration only when its bytes or
+`configuration_format` differ from the configuration it used last. Passing the
+same configuration with every unit therefore keeps the parameter sets that
+later units carry in band in effect, such as an SPS that changes the colour
+declaration; a different configuration replaces the parameter sets that have
+its identifiers. The decoder keeps the record of the configuration it used last
+across `discontinuity`.
 
 Set `output_motion_and_residual=true` to produce H.265 motion vectors and
 residual. The default skips CABAC analysis, its uploads and the motion and
@@ -149,9 +156,34 @@ residual GPU work. `mv()` and `residual()` then return a recoverable
 `InvalidState` error, and the picture remains usable. `missing_slices` and
 `faulty_reference` have no value; `missing_reference` is still reported from
 the reference picture sets. Other codecs accept and ignore the option. In C,
-the trailing `int64_t output_motion_and_residual` field uses 0 to disable and
+the `int64_t output_motion_and_residual` field uses 0 to disable and
 any nonzero value to enable output. A structure too small to contain the
 complete field defaults to 0, including the previous 40-byte structure.
+
+`ColorFallback` holds three optional H.273 codes as `std::optional<std::int32_t>`:
+`color_primaries`, `transfer_characteristics` and `matrix_coefficients`.
+For example, `ColorFallback{9, 16, 9}` supplies BT.2020 primaries, PQ transfer
+and the BT.2020 non-constant matrix. These values stay fixed for the decoder's
+lifetime; create another decoder to change them. For each attribute, picture
+syntax takes precedence, followed by the supplied fallback, the codec's
+standard default, then unknown. Code 2 is unspecified. A declared code without
+a pixtreme token stays unknown and is never replaced by fallback. The matrices
+signalled by VP8 `color_space`, VP9 `color_config` and JFIF count as declarations.
+The BT.601 matrix a VP9 profile-0 intra-only frame infers without `color_config`
+is a standard default. Range and chroma siting do not change.
+
+In C, the options append `has_fallback_color_primaries` (`uint8_t`) and
+`fallback_color_primaries` (`int32_t`), then the corresponding
+`has_fallback_transfer_characteristics` / `fallback_transfer_characteristics`
+and `has_fallback_matrix_coefficients` / `fallback_matrix_coefficients` pairs.
+An incomplete pair or a zero presence flag means absent: its value is neither
+read nor validated. Present codes must be in 0..255; otherwise creation returns
+`INVALID_INPUT`. Code 2 means absent. Matrix 0 is a present code, for which
+pixtreme currently has no token; it gives unknown, as does any unmappable
+fallback code. The previous 48-byte options supply no fallback.
+This addition preserves ABI 9. Consumers that use fallback must set their
+dependency minimum to a released version providing these fields, because an
+older ABI-9 library ignores unknown trailing input bytes.
 
 The decoder retains an access unit's owner record once when it queues the
 input, never for an input it refuses before queueing, and releases it once
@@ -333,7 +365,10 @@ from pixtreme.transport.nvdec import DecoderSession
 
 with DecoderSession(threads=0, device=0, output_layer_set_index=0,
                     output_surfaces=4, codec="hevc",
-                    output_motion_and_residual=False) as decoder:
+                    output_motion_and_residual=False,
+                    fallback_color_primaries=None,
+                    fallback_transfer_characteristics=None,
+                    fallback_matrix_coefficients=None) as decoder:
     for record in decoder.decode(
         access_unit_bytes,
         configuration=configuration_bytes,  # optional
@@ -353,9 +388,21 @@ The keyword `output_motion_and_residual` defaults to `False`. Set it to
 raise a recoverable `DecoderError` with reason `"invalid_state"`,
 `missing_slices` and `faulty_reference` are `None`, and the picture and
 `missing_reference` remain available. Other codecs ignore the keyword.
+The keyword-only `fallback_color_primaries`,
+`fallback_transfer_characteristics` and `fallback_matrix_coefficients` each
+accept `int | None`, defaulting to `None`. They follow the C/C++ colour fallback
+rules above, including code validation, picture precedence and the minimum
+released library version. The caller supplies the codes; the decoder does not
+parse a container.
 `decode` accepts CPU bytes, bytearray, or memoryview. Missing timing stays
 missing; `time_base` is an optional integer `(numerator, denominator)` tuple.
-Call `discontinuity()` before the first AU after a transport interruption.
+The decoder uses `configuration` only when its bytes or format differ from the
+configuration it used last. Passing the same configuration with every call, as
+in the example, therefore keeps the parameter sets that later AUs carry in
+band in effect, such as an SPS that changes the colour declaration; a different
+configuration replaces the parameter sets that have its identifiers.
+Call `discontinuity()` before the first AU after a transport interruption; the
+decoder keeps the record of the configuration it used last across it.
 
 `take_picture()` moves the record's picture to the caller once, as a
 `pixtreme.PixelBuffer` that lends the NVDEC surface without a copy; a second
